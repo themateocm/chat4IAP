@@ -5,9 +5,16 @@ import socketserver
 import json
 import os
 from urllib.parse import parse_qs, urlparse
+from database import Database
 
 class MessageHandler(http.server.SimpleHTTPRequestHandler):
     """Custom handler for processing messages"""
+    
+    def __init__(self, *args, **kwargs):
+        self.db = Database()
+        # Set the directory containing static files
+        directory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        super().__init__(*args, directory=directory, **kwargs)
     
     def do_GET(self):
         """Handle GET requests
@@ -23,10 +30,12 @@ class MessageHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            # TODO: Implement actual message fetching
-            messages = {'messages': []}
-            self.wfile.write(json.dumps(messages).encode())
+            messages = self.db.get_messages()
+            self.wfile.write(json.dumps({'messages': messages}).encode())
             return
+        elif parsed_path.path == '/' or parsed_path.path == '':
+            # Redirect to index.html
+            self.path = '/templates/index.html'
             
         # Serve static files
         return http.server.SimpleHTTPRequestHandler.do_GET(self)
@@ -44,21 +53,27 @@ class MessageHandler(http.server.SimpleHTTPRequestHandler):
             
             try:
                 message_data = json.loads(post_data.decode('utf-8'))
-                # TODO: Implement message storage
+                content = message_data.get('content')
+                
+                if not content:
+                    raise ValueError("Message content is required")
+                
+                # Store message in database
+                message_id = self.db.add_message(content)
                 
                 # Send success response
                 self.send_response(201)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                response = {'status': 'success', 'message': 'Message received'}
+                response = {'status': 'success', 'message': 'Message received', 'id': message_id}
                 self.wfile.write(json.dumps(response).encode())
                 
-            except json.JSONDecodeError:
-                # Handle invalid JSON
+            except (json.JSONDecodeError, ValueError) as e:
+                # Handle invalid JSON or missing content
                 self.send_response(400)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                error = {'error': 'Invalid JSON'}
+                error = {'error': str(e)}
                 self.wfile.write(json.dumps(error).encode())
         else:
             # Handle invalid endpoints
@@ -80,7 +95,7 @@ def run_server(port=8080):
     socketserver.TCPServer.allow_reuse_address = True
     
     with socketserver.TCPServer(("", port), handler) as httpd:
-        print(f"Serving at port {port}")
+        print(f"Server running at http://localhost:{port}")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
