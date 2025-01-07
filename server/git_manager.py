@@ -9,22 +9,28 @@ import subprocess
 from typing import Optional
 
 class GitManager:
-    def __init__(self, messages_dir: str = "messages"):
+    def __init__(self, messages_dir: str = "messages", github_api: Optional[Github] = None):
         """Initialize GitManager
         
         Args:
             messages_dir (str): Directory to store message files
+            github_api (Github, optional): Github API instance for testing
         """
         self.messages_dir = messages_dir
         self.github_token = os.getenv('GITHUB_TOKEN')
         self.repo_name = os.getenv('REPOSITORY_NAME', 'chat4IAP')
         self.github_username = os.getenv('GITHUB_USERNAME')
         
-        if not all([self.github_token, self.github_username]):
+        if not all([self.github_token, self.github_username]) and github_api is None:
             raise ValueError("GitHub credentials not found in environment variables")
         
-        self.g = Github(self.github_token)
-        self.repo = self.g.get_user().get_repo(self.repo_name)
+        # Allow injection of Github API instance for testing
+        self.g = github_api if github_api is not None else Github(self.github_token)
+        
+        if github_api is not None:
+            self.repo = None  # Skip repo initialization for testing
+        else:
+            self.repo = self.g.get_user().get_repo(self.repo_name)
         
         # Create messages directory if it doesn't exist
         os.makedirs(self.messages_dir, exist_ok=True)
