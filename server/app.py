@@ -6,12 +6,18 @@ import json
 import os
 from urllib.parse import parse_qs, urlparse
 from database import Database
+from git_manager import GitManager
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 class MessageHandler(http.server.SimpleHTTPRequestHandler):
     """Custom handler for processing messages"""
     
     def __init__(self, *args, **kwargs):
         self.db = Database()
+        self.git = GitManager()
         # Set the directory containing static files
         directory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         super().__init__(*args, directory=directory, **kwargs)
@@ -61,11 +67,23 @@ class MessageHandler(http.server.SimpleHTTPRequestHandler):
                 # Store message in database
                 message_id = self.db.add_message(content)
                 
+                # Store message in Git repository
+                commit_hash = self.git.store_message(content, message_id)
+                
+                if commit_hash:
+                    # Update the commit hash in database
+                    self.db.update_commit_hash(message_id, commit_hash)
+                
                 # Send success response
                 self.send_response(201)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                response = {'status': 'success', 'message': 'Message received', 'id': message_id}
+                response = {
+                    'status': 'success',
+                    'message': 'Message received',
+                    'id': message_id,
+                    'commit_hash': commit_hash
+                }
                 self.wfile.write(json.dumps(response).encode())
                 
             except (json.JSONDecodeError, ValueError) as e:
