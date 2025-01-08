@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Chat</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            height: 80vh;
+        }
+
+        .messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+
+        .message {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+        }
+
+        .message-meta {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        button {
+            background-color: #2ea44f;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #2c974b;
+        }
+
+        .push-button {
+            background-color: #2ecc71;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        
+        .push-button:hover {
+            background-color: #27ae60;
+        }
+        
+        .push-button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        
+        .chat-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="chat-header">
+            <h1>GitHub Chat</h1>
+            <button id="pushButton" class="push-button">Push to GitHub</button>
+        </div>
+        <div id="messages" class="messages">
+            <!-- Messages will be displayed here -->
+        </div>
+        <div class="input-group">
+            <input type="text" id="message-input" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let isLoading = false;
+        let lastMessageId = null;
+        const POLL_INTERVAL = 5000; // 5 seconds
+
+        // Load messages when the page loads
+        window.onload = () => {
+            loadMessages();
+            // Start polling for new messages
+            setInterval(loadMessages, POLL_INTERVAL);
+        };
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        async function loadMessages() {
+            if (isLoading) return;
+            
+            try {
+                isLoading = true;
+                const messagesDiv = document.getElementById('messages');
+                
+                const response = await fetch('/messages');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const messages = await response.json();
+                
+                // Only update if we have new messages
+                const latestMessageId = messages.length > 0 ? messages[messages.length - 1].id : null;
+                if (latestMessageId !== lastMessageId) {
+                    displayMessages(messages);
+                    lastMessageId = latestMessageId;
+                }
+            } catch (error) {
+                console.error('Error loading messages:', error);
+                showError('Failed to load messages. Please try again later.');
+            } finally {
+                isLoading = false;
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('message-input');
+            const sendButton = document.querySelector('button');
+            const content = input.value.trim();
+            
+            if (!content || isLoading) return;
+
+            try {
+                isLoading = true;
+                input.disabled = true;
+                sendButton.disabled = true;
+                
+                const response = await fetch('/messages', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ content })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    input.value = '';
+                    await loadMessages();
+                } else {
+                    throw new Error(result.message || 'Failed to send message');
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                showError('Failed to send message. Please try again.');
+                input.value = content; // Preserve the message
+            } finally {
+                isLoading = false;
+                input.disabled = false;
+                sendButton.disabled = false;
+                input.focus();
+            }
+        }
+
+        function displayMessages(messages) {
+            const messagesDiv = document.getElementById('messages');
+            
+            if (messages.length === 0) {
+                messagesDiv.innerHTML = '<div class="message">No messages yet. Be the first to send one!</div>';
+                return;
+            }
+
+            messagesDiv.innerHTML = messages.map(msg => `
+                <div class="message" id="msg-${msg.id}">
+                    <div class="message-content">${formatMessage(msg.content)}</div>
+                    <div class="message-meta">
+                        ${formatTimestamp(msg.timestamp)}
+                        ${msg.commit_hash ? 
+                            `<span title="Git Commit Hash">📎 ${msg.commit_hash.substring(0, 7)}</span>` 
+                            : ''}
+                    </div>
+                </div>
+            `).join('');
+            
+            // Scroll to bottom if we're already near the bottom
+            const isNearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 100;
+            if (isNearBottom) {
+                scrollToBottom();
+            }
+        }
+
+        function formatMessage(content) {
+            // Escape HTML to prevent XSS
+            const escaped = content
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+            
+            // Convert URLs to links
+            return escaped.replace(
+                /(https?:\/\/[^\s]+)/g, 
+                '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+            );
+        }
+
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            
+            // Less than 1 minute ago
+            if (diff < 60000) {
+                return 'Just now';
+            }
+            
+            // Less than 1 hour ago
+            if (diff < 3600000) {
+                const minutes = Math.floor(diff / 60000);
+                return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+            }
+            
+            // Less than 24 hours ago
+            if (diff < 86400000) {
+                const hours = Math.floor(diff / 3600000);
+                return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+            }
+            
+            // Default to full date
+            return date.toLocaleString();
+        }
+
+        function scrollToBottom() {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function showError(message) {
+            // You could implement a nice toast notification here
+            alert(message);
+        }
+
+        // Push to GitHub functionality
+        document.getElementById('pushButton').addEventListener('click', async function() {
+            try {
+                const button = this;
+                button.disabled = true;
+                button.textContent = 'Pushing...';
+                
+                const response = await fetch('/push', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    alert('Successfully pushed to GitHub repositories!');
+                } else {
+                    alert('Error pushing to GitHub: ' + result.message);
+                }
+            } catch (error) {
+                alert('Error pushing to GitHub: ' + error.message);
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Push to GitHub';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -4,20 +4,44 @@ import http.server
 import socketserver
 import json
 import os
+from datetime import datetime
+from typing import List, Dict
 from urllib.parse import parse_qs, urlparse
-from database import Database
-from git_manager import GitManager
+from server.database import Database
+from server.repository_manager import RepositoryManager
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Debug: Print environment variables
+print("Debug: Environment variables:")
+print(f"GITHUB_TOKEN exists: {'GITHUB_TOKEN' in os.environ}")
+print(f"GITHUB_USERNAME exists: {'GITHUB_USERNAME' in os.environ}")
+print(f"REPOSITORY_NAME exists: {'REPOSITORY_NAME' in os.environ}")
 
 class MessageHandler(http.server.SimpleHTTPRequestHandler):
     """Custom handler for processing messages"""
     
     def __init__(self, *args, **kwargs):
         self.db = Database()
-        self.git = GitManager()
+        self.repo_manager = RepositoryManager()
+        
+        # Configure repositories
+        # You can add more repositories here
+        self.repo_manager.add_repository(
+            owner="your-username",
+            name="chat-messages-primary",
+            branch="main",
+            messages_path="messages"
+        )
+        self.repo_manager.add_repository(
+            owner="your-username",
+            name="chat-messages-secondary",
+            branch="main",
+            messages_path="messages"
+        )
+        
         # Set the directory containing static files
         directory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         super().__init__(*args, directory=directory, **kwargs)
@@ -27,48 +51,107 @@ class MessageHandler(http.server.SimpleHTTPRequestHandler):
         
         Serves static files and handles API endpoints:
         - /: Serves the main page
-        - /messages: Returns list of messages
+        - /messages: Returns all messages from all repositories
         """
-        parsed_path = urlparse(self.path)
-        
-        if parsed_path.path == '/messages':
-            # Return messages as JSON
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            messages = self.db.get_messages()
-            self.wfile.write(json.dumps({'messages': messages}).encode())
-            return
-        elif parsed_path.path == '/' or parsed_path.path == '':
-            # Redirect to index.html
-            self.path = '/templates/index.html'
+        if self.path == '/messages':
+            try:
+                # Get messages from both database and repositories
+                db_messages = self.db.get_messages(limit=50)
+                repo_messages = self.repo_manager.get_messages(limit=50)
+                
+                # Merge messages and sort by timestamp
+                all_messages = db_messages + repo_messages
+                all_messages.sort(key=lambda x: x['timestamp'])
+                
+                # Take the last 50 messages
+                messages = all_messages[-50:]
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                self.wfile.write(json.dumps(messages).encode())
+                return
+            except Exception as e:
+                print(f"Error getting messages: {e}")
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                response = {'status': 'error', 'message': str(e)}
+                self.wfile.write(json.dumps(response).encode())
+                return
             
-        # Serve static files
-        return http.server.SimpleHTTPRequestHandler.do_GET(self)
+        if self.path == '/':
+            # Serve the main page
+            self.path = 'static/index.html'
+            return http.server.SimpleHTTPRequestHandler.do_GET(self)
+        else:
+            # Try to serve static files
+            return http.server.SimpleHTTPRequestHandler.do_GET(self)
     
     def do_POST(self):
         """Handle POST requests
         
-        Processes message submissions:
-        - /messages: Accepts new messages
+        Processes message submissions and repository operations:
+        - /messages: Accepts new messages and stores them in both database and repositories
+        - /push: Pushes all repositories to their remotes
         """
-        if self.path == '/messages':
-            # Get message content
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            
+        if self.path == '/push':
             try:
-                message_data = json.loads(post_data.decode('utf-8'))
-                content = message_data.get('content')
+                results = self.repo_manager.push_repositories()
                 
-                if not content:
-                    raise ValueError("Message content is required")
+                # Send success response
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                response = {
+                    'status': 'success',
+                    'message': 'Push operation completed',
+                    'results': results
+                }
+                self.wfile.write(json.dumps(response).encode())
+                return
+                
+            except Exception as e:
+                print(f"Error pushing repositories: {e}")
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                response = {'status': 'error', 'message': str(e)}
+                self.wfile.write(json.dumps(response).encode())
+                return
+                
+        if self.path == '/messages':
+            try:
+                # Get content length
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                
+                try:
+                    # Parse JSON data
+                    data = json.loads(post_data.decode('utf-8'))
+                except json.JSONDecodeError:
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    response = {'status': 'error', 'message': 'Invalid JSON format'}
+                    self.wfile.write(json.dumps(response).encode())
+                    return
+                
+                # Check if content field exists and is not empty
+                if 'content' not in data or not data['content'].strip():
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    response = {'status': 'error', 'message': 'Missing or empty content field'}
+                    self.wfile.write(json.dumps(response).encode())
+                    return
                 
                 # Store message in database
-                message_id = self.db.add_message(content)
+                message_id = self.db.add_message(data['content'])
                 
-                # Store message in Git repository
-                commit_hash = self.git.store_message(content, message_id)
+                # Store message in repositories
+                commit_hash = self.repo_manager.store_message(data['content'], str(message_id))
                 
                 if commit_hash:
                     # Update the commit hash in database
@@ -86,19 +169,19 @@ class MessageHandler(http.server.SimpleHTTPRequestHandler):
                 }
                 self.wfile.write(json.dumps(response).encode())
                 
-            except (json.JSONDecodeError, ValueError) as e:
-                # Handle invalid JSON or missing content
-                self.send_response(400)
+            except Exception as e:
+                print(f"Error processing message: {e}")
+                self.send_response(500)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                error = {'error': str(e)}
-                self.wfile.write(json.dumps(error).encode())
+                response = {'status': 'error', 'message': str(e)}
+                self.wfile.write(json.dumps(response).encode())
         else:
             # Handle invalid endpoints
             self.send_response(404)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            error = {'error': 'Endpoint not found'}
+            error = {'status': 'error', 'message': 'Endpoint not found'}
             self.wfile.write(json.dumps(error).encode())
 
 def run_server(port=8080):

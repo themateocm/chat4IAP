@@ -71,32 +71,26 @@ class GitManager:
             Optional[str]: Commit hash if successful, None otherwise
         """
         try:
-            # Stage the file
-            subprocess.run(['git', 'add', filepath], check=True)
+            # Read file content
+            with open(filepath, 'r') as f:
+                content = f.read()
             
-            # Create commit
-            commit_process = subprocess.run(
-                ['git', 'commit', '-m', message],
-                capture_output=True,
-                text=True,
-                check=True
+            # Get relative path from repo root
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            relative_path = os.path.relpath(filepath, repo_root)
+            
+            # Create or update file in GitHub
+            result = self.repo.create_file(
+                path=relative_path,
+                message=message,
+                content=content,
+                branch="master"
             )
             
-            # Extract commit hash from commit message
-            commit_hash = None
-            for line in commit_process.stdout.split('\n'):
-                if line.startswith('[master') or line.startswith('[main'):
-                    commit_hash = line.split()[1]
-                    break
+            return result['commit'].sha[:7] if result else None
             
-            # Push to remote
-            subprocess.run(['git', 'push', 'origin', 'master'], check=True)
-            
-            return commit_hash
-            
-        except subprocess.CalledProcessError as e:
-            print(f"Error in Git operations: {e}")
-            print(f"Command output: {e.output if hasattr(e, 'output') else 'No output'}")
+        except Exception as e:
+            print(f"Error in GitHub operations: {e}")
             return None
     
     def store_message(self, content: str, message_id: int) -> Optional[str]:

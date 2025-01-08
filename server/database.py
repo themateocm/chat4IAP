@@ -102,6 +102,36 @@ class Database:
             print(f"Error retrieving messages: {e}")
             raise
     
+    def get_all_messages(self) -> List[Dict]:
+        """Retrieve all messages from the database
+        
+        Returns:
+            List[Dict]: List of messages, each containing id, content, timestamp, and git_commit_hash
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, content, timestamp, git_commit_hash
+                    FROM messages
+                    ORDER BY timestamp DESC
+                """)
+                
+                messages = []
+                for row in cursor.fetchall():
+                    messages.append({
+                        'id': row[0],
+                        'content': row[1],
+                        'timestamp': row[2],
+                        'git_commit_hash': row[3]
+                    })
+                
+                return messages
+                
+        except Exception as e:
+            print(f"Error retrieving messages: {e}")
+            raise
+    
     def update_commit_hash(self, message_id: int, git_commit_hash: str):
         """Update the git commit hash for a message
         
